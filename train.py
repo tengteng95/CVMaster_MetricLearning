@@ -1,4 +1,5 @@
 import argparse
+from ast import parse
 import os
 
 import megengine
@@ -16,11 +17,12 @@ from utils.metrics import R1_mAP_eval
 
 
 class ReIDBaseline(M.Module):
-    def __init__(self, nr_class, feat_dim):
+    def __init__(self, nr_class, feat_dim, droprate=0):
         super().__init__()
         self.backbone = resnet50(last_stride=1, pretrained=True)
         self.embedding = M.Linear(2048, feat_dim)
         self.bn_neck = M.BatchNorm1d(feat_dim)
+        self.dropout = M.Dropout(droprate)
         self.criterion = CELoss(feat_dim, nr_class)
 
     def forward_one_step(self, x, labels):
@@ -30,6 +32,7 @@ class ReIDBaseline(M.Module):
 
         embedding = self.embedding(feat)
         embedding = self.bn_neck(embedding)
+        embedding = self.dropout(embedding)
         loss = self.criterion(embedding, labels)
         return loss
 
@@ -116,31 +119,25 @@ parser.add_argument("--num-instances", type=int, default=4)
 parser.add_argument("--re-prob", type=float, default=0.5)
 parser.add_argument("--num-workers", type=int, default=0)
 parser.add_argument("--feat-dim", type=int, default=2048)
+parser.add_argument("--droprate", type=float, default=0)
 parser.add_argument("--max-epochs", type=int, default=60)
-parser.add_argument("--lr", default=0.01, type=float)
+parser.add_argument("--lr", default=0.02, type=float)
 parser.add_argument("--weight-decay", default=0.0005, type=float)
-parser.add_argument("--milestones", default=[20, 40], nargs="+")
+parser.add_argument("--milestones", default=[40], nargs="+")
 parser.add_argument("--eval-period", default=30, type=int)
 parser.add_argument("--output-dir", default="./outputs")
 parser.add_argument("--tag", default="CE_Baseline")
 
 args = parser.parse_args()
 args.milestones = [int(item) for item in args.milestones]
-print("milestones", args.milestones)
 args.output_dir = os.path.join(args.output_dir, args.tag)
 if not os.path.exists(args.output_dir):
     os.makedirs(args.output_dir)
 
-
 train_loader, val_loader, num_query, num_classes, _, _ = make_dataloader(args)
-model = ReIDBaseline(nr_class=num_classes, feat_dim=args.feat_dim)
+model = ReIDBaseline(nr_class=num_classes, feat_dim=args.feat_dim, droprate=args.droprate)
 
-parameters_for_train = []
-for name, params in model.named_parameters():
-    if "bn_neck.bias" in name:
-        print("skip bn_neck bias....")
-    else:
-        parameters_for_train.append(params)
+logger.info(model)
 
 optimizer = optim.SGD(model.parameters(), lr=args.lr)
 scheduler = optim.MultiStepLR(optimizer, args.milestones)
